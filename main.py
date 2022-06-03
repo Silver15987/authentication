@@ -1,8 +1,9 @@
 import jwt
 import time 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.hash import bcrypt
+from testtt import JWT_SECRET
 from tortoise import fields
 from tortoise.contrib.fastapi import register_tortoise
 from tortoise.contrib.pydantic import pydantic_model_creator
@@ -36,6 +37,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl='token')
     # verify that the form data is correct
     # see if the user exist and if the password is correct
 
+JWT_SECRET = 'MTY1NDI1MjE4Nw==' # Base64Encode the current UNIX Time
+# Never share your JWT_SECRET :), based on unix time = 1654252187
 
 # token endpoint
 @app.post('/token')
@@ -48,7 +51,7 @@ async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
     
     user_obj = await User_Pydantic.from_tortoise_orm(user) # convert tortoise-orm object to pydantic object
     
-    JWT_SECRET = str(int(time.time()))
+    #JWT_SECRET = str(int(time.time())) # Tried this method to generate random jwt secret cuase it sounded fun
 
     token = jwt.encode(user_obj.dict(), JWT_SECRET)
     
@@ -57,15 +60,34 @@ async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
         'token_type': 'bearer'
         }
 
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    # decode the token
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user = await User.get(id=payload.get('id'))
+    except:
+        raise HTTPException( status_code = 
+            status.HTTP_401_UNAUTHORIZED, 
+            detail='Incorrect User or Password')
+    return await User_Pydantic.from_tortoise_orm(user) # the user ins't being passed directly rather it's the token
+
+# create user endpoint
 @app.post('/users', response_model=User_Pydantic) #User here is output
 async def create_user(user: UserIn_Pydantic): #user here in input
     #print("Entry for temp hash is:",user.password_hash)
     temp_hash = bcrypt.hash(user.password_hash)
+    
     user_obj = User(username=user.username, password_hash=temp_hash) #user will pass a username and password, and then it will be dehashed by bcrypt
-    print("In post users\nhash:{}".format(temp_hash))
+    # print("In post users\nhash:{}".format(temp_hash))
     await user_obj.save() # 
+    
     return await User_Pydantic.from_tortoise_orm(user_obj) # user tortoise-orm object converted into user Pydantic object
     #create the user and return their information
+
+#
+@app.get('/users/me', response_model=User_Pydantic)
+async def get_user(user: User_Pydantic = Depends(get_current_user)):
+    return user
 
 
 register_tortoise(
