@@ -2,6 +2,7 @@ import jwt
 import time 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+import socketio
 from passlib.hash import bcrypt
 from testtt import JWT_SECRET
 from tortoise import fields
@@ -9,7 +10,11 @@ from tortoise.contrib.fastapi import register_tortoise
 from tortoise.contrib.pydantic import pydantic_model_creator
 from tortoise.models import Model
 
+# call the FastAPI and socketio
+sio = socketio.AsyncServer(cors_allowed_origins='*', async_mode='asgi')
 app = FastAPI()
+#create app and socket connection
+socketio_app = socketio.ASGIApp(sio, app)
 
 # explain what is in the database
 class User(Model): 
@@ -40,6 +45,18 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl='token')
 JWT_SECRET = 'MTY1NDI1MjE4Nw==' # Base64Encode the current UNIX Time
 # Never share your JWT_SECRET :), based on unix time = 1654252187
 
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    # decode the token
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user = await User.get(id=payload.get('id'))
+    except:
+        raise HTTPException( status_code = 
+            status.HTTP_401_UNAUTHORIZED, 
+            detail='Incorrect User or Password')
+    return await User_Pydantic.from_tortoise_orm(user) # the user ins't being passed directly rather it's the token
+
+
 # token endpoint
 @app.post('/token')
 async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
@@ -60,16 +77,26 @@ async def generate_token(form_data: OAuth2PasswordRequestForm = Depends()):
         'token_type': 'bearer'
         }
 
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    # decode the token
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-        user = await User.get(id=payload.get('id'))
-    except:
-        raise HTTPException( status_code = 
-            status.HTTP_401_UNAUTHORIZED, 
-            detail='Incorrect User or Password')
-    return await User_Pydantic.from_tortoise_orm(user) # the user ins't being passed directly rather it's the token
+
+app.mount("/", socketio_app)  # Here we mount socket app to main fastapi app
+
+# connect event takes 2 arguments, sid is the unique session-id for a user
+# assigned to a client when they connect for every event to this client, sid is going to be important for event handler
+# environ is a dictionary that has all the details from the client request 
+@sio.event
+def connect(sid, environ):
+    print("connect ", sid)
+
+
+@sio.on('message')
+async def chat_message(sid, data):
+    print("message ", data)
+    await sio.emit('response', 'hi ' + data)
+
+@sio.event
+def disconnect(sid):
+    print('disconnect ', sid)
+
 
 # create user endpoint
 @app.post('/users', response_model=User_Pydantic) #User here is output
@@ -88,6 +115,10 @@ async def create_user(user: UserIn_Pydantic): #user here in input
 @app.get('/users/me', response_model=User_Pydantic)
 async def get_user(user: User_Pydantic = Depends(get_current_user)):
     return user
+
+@app.get("/v2")
+def read_main():
+    return {"message": "Hello World"}
 
 
 register_tortoise(
